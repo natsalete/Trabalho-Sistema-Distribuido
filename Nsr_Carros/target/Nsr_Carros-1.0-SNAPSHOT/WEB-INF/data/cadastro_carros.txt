@@ -1,0 +1,1 @@
+1|HGP2706|Puro sangue|Ferrari|2024|Gasolina|Caramelo|16.5|Sedan|true|20000.00|30000.00
