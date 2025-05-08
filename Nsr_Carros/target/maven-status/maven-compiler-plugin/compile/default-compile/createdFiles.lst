@@ -1,0 +1,6 @@
+com\poo2\nsr_carros\resources\JakartaEE11Resource.class
+com\poo2\nsr_carros\servlets\Nsr_GravarArquivo.class
+com\poo2\nsr_carros\servlets\Nsr_BuscarArquivo.class
+com\poo2\nsr_carros\servlets\Nsr_GerenciarDados.class
+com\poo2\nsr_carros\JakartaRestConfiguration.class
+com\poo2\nsr_carros\servlets\Nsr_Carros.class
