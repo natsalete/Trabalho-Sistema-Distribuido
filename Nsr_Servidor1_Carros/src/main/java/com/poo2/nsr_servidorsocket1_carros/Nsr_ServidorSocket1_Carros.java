@@ -12,14 +12,11 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Timer;
-import java.util.TimerTask;
+import javax.swing.Timer;
 
 /**
  * Servidor de Sincronização de Cadastro de Carros
- * Com suporte para clientes e manipulação de dados
+ * Com suporte para clientes e sincronização de dados
  */
 public class Nsr_ServidorSocket1_Carros extends JFrame {
     
@@ -31,8 +28,6 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
     private JButton Nsr_iniciarButton, Nsr_pararButton, Nsr_sincronizarButton, Nsr_selecionarArquivoButton;
     private JComboBox<String> Nsr_tipoSincronizacaoCombo;
     private JTextArea Nsr_logArea;
-    private JCheckBox Nsr_sincronizacaoAutomaticaCheckBox;
-    private JSpinner Nsr_intervaloSincronizacaoSpinner;
     
     // Variáveis do servidor
     private ServerSocket Nsr_serverSocket;
@@ -42,18 +37,8 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
     private String Nsr_arquivoDados = "cadastro_carros.txt";
     private List<Nsr_ClienteHandler> Nsr_clientesConectados;
     
-    // Variáveis para sincronização automática
-    private boolean Nsr_sincronizacaoAutomaticaAtiva = false;
-    private Timer Nsr_timerSincronizacao;
-    private int Nsr_intervaloSincronizacao = 30; // segundos
-    private String Nsr_ipServidorRemoto = "127.0.0.1";
-    private int Nsr_portaServidorRemoto = 2223;
-    private int Nsr_tipoSincronizacaoAtual = 0;
-    
     // Constantes para sincronização
     private static final int Nsr_COMANDO_SINCRONIZAR = 1;
-    private static final int Nsr_COMANDO_ENVIAR_ARQUIVO = 2;
-    private static final int Nsr_COMANDO_RECEBER_ARQUIVO = 3;
     
     // Constantes para comandos de cliente
     private static final int Nsr_COMANDO_PING = 10;
@@ -63,27 +48,9 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
     private static final int Nsr_COMANDO_ADD = 30;
     private static final int Nsr_COMANDO_UPDATE = 31;
     private static final int Nsr_COMANDO_DELETE = 32;
-    
-     /**
-     * Variáveis necessárias para sincronização automática
-     */
-    private Timer Nsr_timerSincronizacao;
-    private boolean Nsr_sincronizacaoAutomaticaAtiva;
-    private int Nsr_intervaloSincronizacao;
-    private String Nsr_ipServidorRemoto;
-    private int Nsr_portaServidorRemoto;
-    private int Nsr_tipoSincronizacaoAtual;
-
-    // Componentes da interface de sincronização
-    private JPanel Nsr_syncPanel;
-    private JTextField Nsr_ipSincronizacaoField;
-    private JTextField Nsr_portaSincronizacaoField;
-    private JComboBox<String> Nsr_tipoSincronizacaoCombo;
-    private JTextField Nsr_intervaloSincronizacaoField;
-    private JCheckBox Nsr_habilitarSincAutomaticaCheck;
-
-    // Constantes para formato de arquivo
-    private static final String Nsr_DELIMITADOR = "|";
+    private Timer Nsr_syncTimer;
+    private boolean Nsr_autoSync = false;
+    private int Nsr_syncInterval = 60; // segundos
     
     public Nsr_ServidorSocket1_Carros() {
         Nsr_clientesConectados = new CopyOnWriteArrayList<>();
@@ -95,7 +62,7 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
      */
     private void Nsr_initComponents() {
         setTitle("Servidor de Sincronização de Cadastro de Carros");
-        setSize(800, 550); // Aumentei um pouco para acomodar o log e os novos controles
+        setSize(750, 500);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout(5, 5));
@@ -105,11 +72,11 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
         Nsr_controlPanel.setBorder(BorderFactory.createTitledBorder("Controles do Servidor"));
         
         // Campo para porta
-        JLabel Nsr_portaLabel = new JLabel("Porta:");
+        JLabel portaLabel = new JLabel("Porta:");
         Nsr_portaField = new JTextField(Integer.toString(Nsr_serverPort), 5);
         
         // Campo para arquivo de dados
-        JLabel Nsr_arquivoLabel = new JLabel("Arquivo de Dados:");
+        JLabel arquivoLabel = new JLabel("Arquivo de Dados:");
         Nsr_arquivoField = new JTextField(Nsr_arquivoDados, 30);
         
         // Botão para selecionar arquivo
@@ -117,11 +84,11 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
         Nsr_selecionarArquivoButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                JFileChooser Nsr_fileChooser = new JFileChooser();
-                Nsr_fileChooser.setDialogTitle("Selecionar Arquivo de Dados");
-                if (Nsr_fileChooser.showOpenDialog(Nsr_ServidorSocket1_Carros.this) == JFileChooser.APPROVE_OPTION) {
-                    File Nsr_selectedFile = Nsr_fileChooser.getSelectedFile();
-                    Nsr_arquivoField.setText(Nsr_selectedFile.getAbsolutePath());
+                JFileChooser fileChooser = new JFileChooser();
+                fileChooser.setDialogTitle("Selecionar Arquivo de Dados");
+                if (fileChooser.showOpenDialog(Nsr_ServidorSocket1_Carros.this) == JFileChooser.APPROVE_OPTION) {
+                    File selectedFile = fileChooser.getSelectedFile();
+                    Nsr_arquivoField.setText(selectedFile.getAbsolutePath());
                 }
             }
         });
@@ -134,16 +101,6 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
                 try {
                     Nsr_serverPort = Integer.parseInt(Nsr_portaField.getText().trim());
                     Nsr_arquivoDados = Nsr_arquivoField.getText().trim();
-                    
-                    // Verificar se o arquivo existe
-                    File Nsr_arquivo = new File(Nsr_arquivoDados);
-                    if (!Nsr_arquivo.exists()) {
-                        JOptionPane.showMessageDialog(Nsr_ServidorSocket1_Carros.this, 
-                            "Arquivo de dados não encontrado. Por favor, selecione um arquivo existente.", 
-                            "Erro", JOptionPane.ERROR_MESSAGE);
-                        return;
-                    }
-                    
                     Nsr_startServer();
                     Nsr_toggleControls(false);
                 } catch (NumberFormatException ex) {
@@ -163,25 +120,25 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
             }
         });
         
-        Nsr_controlPanel.add(Nsr_portaLabel);
+        Nsr_controlPanel.add(portaLabel);
         Nsr_controlPanel.add(Nsr_portaField);
-        Nsr_controlPanel.add(Nsr_arquivoLabel);
+        Nsr_controlPanel.add(arquivoLabel);
         Nsr_controlPanel.add(Nsr_arquivoField);
         Nsr_controlPanel.add(Nsr_selecionarArquivoButton);
         Nsr_controlPanel.add(Nsr_iniciarButton);
         Nsr_controlPanel.add(Nsr_pararButton);
+        
         // Painel de sincronização (parte central)
-        Nsr_syncPanel = new JPanel(new GridLayout(3, 1, 5, 5));
+        Nsr_syncPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
         Nsr_syncPanel.setBorder(BorderFactory.createTitledBorder("Sincronização com outro Servidor"));
         
-        JPanel Nsr_syncServerPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
-        JLabel Nsr_ipLabel = new JLabel("IP do Servidor:");
+        JLabel ipLabel = new JLabel("IP do Servidor:");
         Nsr_ipSincronizacaoField = new JTextField("127.0.0.1", 15);
         
-        JLabel Nsr_portaDestLabel = new JLabel("Porta:");
+        JLabel portaDestLabel = new JLabel("Porta:");
         Nsr_portaSincronizacaoField = new JTextField("2223", 5);
         
-        JLabel Nsr_tipoSincLabel = new JLabel("Tipo de Sincronização:");
+        JLabel tipoSincLabel = new JLabel("Tipo de Sincronização:");
         Nsr_tipoSincronizacaoCombo = new JComboBox<>(new String[]{"Unilateral (Enviar)", "Unilateral (Receber)", "Bilateral"});
         
         Nsr_sincronizarButton = new JButton("Conectar e Sincronizar");
@@ -192,90 +149,68 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
             }
         });
         
-        Nsr_syncServerPanel.add(Nsr_ipLabel);
-        Nsr_syncServerPanel.add(Nsr_ipSincronizacaoField);
-        Nsr_syncServerPanel.add(Nsr_portaDestLabel);
-        Nsr_syncServerPanel.add(Nsr_portaSincronizacaoField);
-        Nsr_syncServerPanel.add(Nsr_tipoSincLabel);
-        Nsr_syncServerPanel.add(Nsr_tipoSincronizacaoCombo);
-        Nsr_syncServerPanel.add(Nsr_sincronizarButton);
+        Nsr_syncPanel.add(ipLabel);
+        Nsr_syncPanel.add(Nsr_ipSincronizacaoField);
+        Nsr_syncPanel.add(portaDestLabel);
+        Nsr_syncPanel.add(Nsr_portaSincronizacaoField);
+        Nsr_syncPanel.add(tipoSincLabel);
+        Nsr_syncPanel.add(Nsr_tipoSincronizacaoCombo);
+        Nsr_syncPanel.add(Nsr_sincronizarButton);
         
-        // Painel para sincronização automática
-        JPanel Nsr_autoSyncPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
-        Nsr_sincronizacaoAutomaticaCheckBox = new JCheckBox("Sincronização Automática");
-        Nsr_sincronizacaoAutomaticaCheckBox.addActionListener(new ActionListener() {
+        JCheckBox Nsr_autoSyncCheckBox = new JCheckBox("Sincronização Automática");
+        JLabel Nsr_intervalLabel = new JLabel("Intervalo (seg):");
+        JTextField Nsr_intervalField = new JTextField(Integer.toString(Nsr_syncInterval), 5);
+        Nsr_autoSyncCheckBox.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                boolean Nsr_isSelected = Nsr_sincronizacaoAutomaticaCheckBox.isSelected();
-                Nsr_intervaloSincronizacaoSpinner.setEnabled(Nsr_isSelected);
-                
-                // Salvar configurações atuais
-                Nsr_ipServidorRemoto = Nsr_ipSincronizacaoField.getText().trim();
-                Nsr_portaServidorRemoto = Integer.parseInt(Nsr_portaSincronizacaoField.getText().trim());
-                Nsr_tipoSincronizacaoAtual = Nsr_tipoSincronizacaoCombo.getSelectedIndex();
-                
-                if (Nsr_isSelected && Nsr_running) {
+                Nsr_autoSync = Nsr_autoSyncCheckBox.isSelected();
+                Nsr_intervalField.setEnabled(Nsr_autoSync);
+                try {
+                    Nsr_syncInterval = Integer.parseInt(Nsr_intervalField.getText().trim());
+                } catch (NumberFormatException ex) {
+                    Nsr_syncInterval = 60;
+                    Nsr_intervalField.setText("60");
+                }
+
+                if (Nsr_autoSync && Nsr_running) {
                     Nsr_iniciarSincronizacaoAutomatica();
                 } else {
                     Nsr_pararSincronizacaoAutomatica();
                 }
             }
         });
-        
-        // Spinner para configurar o intervalo de sincronização
-        JLabel Nsr_intervaloLabel = new JLabel("Intervalo (segundos):");
-        SpinnerNumberModel Nsr_spinnerModel = new SpinnerNumberModel(30, 5, 3600, 5);
-        Nsr_intervaloSincronizacaoSpinner = new JSpinner(Nsr_spinnerModel);
-        Nsr_intervaloSincronizacaoSpinner.setEnabled(false);
-        Nsr_intervaloSincronizacaoSpinner.addChangeListener(e -> {
-            Nsr_intervaloSincronizacao = (Integer) Nsr_intervaloSincronizacaoSpinner.getValue();
-            if (Nsr_sincronizacaoAutomaticaAtiva) {
-                // Reiniciar o timer com o novo intervalo
-                Nsr_pararSincronizacaoAutomatica();
-                Nsr_iniciarSincronizacaoAutomatica();
-            }
-        });
-        
-        Nsr_autoSyncPanel.add(Nsr_sincronizacaoAutomaticaCheckBox);
-        Nsr_autoSyncPanel.add(Nsr_intervaloLabel);
-        Nsr_autoSyncPanel.add(Nsr_intervaloSincronizacaoSpinner);
-        
-        // Status da sincronização
-        JPanel Nsr_syncStatusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
-        JLabel Nsr_lastSyncLabel = new JLabel("Última sincronização: Nunca");
-        Nsr_syncStatusPanel.add(Nsr_lastSyncLabel);
-        
-        Nsr_syncPanel.add(Nsr_syncServerPanel);
-        Nsr_syncPanel.add(Nsr_autoSyncPanel);
-        Nsr_syncPanel.add(Nsr_syncStatusPanel);
+
+        Nsr_syncPanel.add(Nsr_autoSyncCheckBox);
+        Nsr_syncPanel.add(Nsr_intervalLabel);
+        Nsr_syncPanel.add(Nsr_intervalField);
         
         // Área de log
         Nsr_logArea = new JTextArea();
         Nsr_logArea.setEditable(false);
-        JScrollPane Nsr_scrollPane = new JScrollPane(Nsr_logArea);
-        Nsr_scrollPane.setBorder(BorderFactory.createTitledBorder("Log de Atividades"));
-        Nsr_scrollPane.setPreferredSize(new Dimension(700, 150));
+        JScrollPane scrollPane = new JScrollPane(Nsr_logArea);
+        scrollPane.setBorder(BorderFactory.createTitledBorder("Log de Atividades"));
+        scrollPane.setPreferredSize(new Dimension(700, 150));
         
         // Painel de status (parte inferior)
         Nsr_statusPanel = new JPanel(new BorderLayout(5, 5));
         Nsr_statusPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 
-        JPanel Nsr_leftStatusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel leftStatusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         Nsr_statusLabel = new JLabel("Status: Desconectado");
         Nsr_clientCountLabel = new JLabel("Clientes: 0");
-        Nsr_leftStatusPanel.add(Nsr_statusLabel);
-        Nsr_leftStatusPanel.add(Box.createHorizontalStrut(20));
-        Nsr_leftStatusPanel.add(Nsr_clientCountLabel);
+        leftStatusPanel.add(Nsr_statusLabel);
+        leftStatusPanel.add(Box.createHorizontalStrut(20));
+        leftStatusPanel.add(Nsr_clientCountLabel);
 
-        Nsr_statusPanel.add(Nsr_leftStatusPanel, BorderLayout.WEST);
+        Nsr_statusPanel.add(leftStatusPanel, BorderLayout.WEST);
 
         // Adiciona componentes ao frame
-        JPanel Nsr_mainPanel = new JPanel(new BorderLayout());
-        Nsr_mainPanel.add(Nsr_controlPanel, BorderLayout.NORTH);
-        Nsr_mainPanel.add(Nsr_syncPanel, BorderLayout.CENTER);
-        Nsr_mainPanel.add(Nsr_scrollPane, BorderLayout.SOUTH);
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.add(Nsr_controlPanel, BorderLayout.NORTH);
+        mainPanel.add(Nsr_syncPanel, BorderLayout.CENTER);
+        mainPanel.add(scrollPane, BorderLayout.SOUTH);
         
-        add(Nsr_mainPanel, BorderLayout.CENTER);
+        add(mainPanel, BorderLayout.CENTER);
         add(Nsr_statusPanel, BorderLayout.SOUTH);
 
         // Lida com o fechamento da janela
@@ -290,31 +225,24 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
     /**
      * Adiciona uma mensagem ao log
      */
-    private void Nsr_adicionarLog(String Nsr_mensagem) {
+    private void Nsr_adicionarLog(String mensagem) {
         SwingUtilities.invokeLater(() -> {
-            Nsr_logArea.append(Nsr_mensagem + "\n");
+            Nsr_logArea.append(mensagem + "\n");
             // Auto-scroll para a última linha
             Nsr_logArea.setCaretPosition(Nsr_logArea.getDocument().getLength());
         });
-        System.out.println(Nsr_mensagem);
+        System.out.println(mensagem);
     }
     
     /**
      * Habilita/desabilita controles baseado no estado do servidor
      */
-    private void Nsr_toggleControls(boolean Nsr_enabled) {
-        Nsr_portaField.setEnabled(Nsr_enabled);
-        Nsr_arquivoField.setEnabled(Nsr_enabled);
-        Nsr_selecionarArquivoButton.setEnabled(Nsr_enabled);
-        Nsr_iniciarButton.setEnabled(Nsr_enabled);
-        Nsr_pararButton.setEnabled(!Nsr_enabled);
-        
-        // Se o servidor estiver rodando, iniciar sincronização automática se estiver selecionada
-        if (!Nsr_enabled && Nsr_sincronizacaoAutomaticaCheckBox.isSelected()) {
-            Nsr_iniciarSincronizacaoAutomatica();
-        } else if (Nsr_enabled) {
-            Nsr_pararSincronizacaoAutomatica();
-        }
+    private void Nsr_toggleControls(boolean enabled) {
+        Nsr_portaField.setEnabled(enabled);
+        Nsr_arquivoField.setEnabled(enabled);
+        Nsr_selecionarArquivoButton.setEnabled(enabled);
+        Nsr_iniciarButton.setEnabled(enabled);
+        Nsr_pararButton.setEnabled(!enabled);
     }
     
     /**
@@ -333,19 +261,23 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
 
                     while (Nsr_running) {
                         try {
-                            Socket Nsr_conexao = Nsr_serverSocket.accept();
-                            Nsr_adicionarLog("Nova conexão aceita: " + Nsr_conexao.getInetAddress().getHostAddress());
+                            Socket conexao = Nsr_serverSocket.accept();
+                            Nsr_adicionarLog("Nova conexão aceita: " + conexao.getInetAddress().getHostAddress());
 
                             // Inicia thread para lidar com o cliente
-                            Nsr_ClienteHandler Nsr_clienteHandler = new Nsr_ClienteHandler(Nsr_conexao);
-                            Nsr_clientesConectados.add(Nsr_clienteHandler);
+                            Nsr_ClienteHandler clienteHandler = new Nsr_ClienteHandler(conexao);
+                            Nsr_clientesConectados.add(clienteHandler);
                             Nsr_updateClientCount();
-                            Nsr_clienteHandler.start();
+                            clienteHandler.start();
                         } catch (IOException e) {
                             if (Nsr_running) {
                                 Nsr_adicionarLog("Erro ao aceitar conexão: " + e.getMessage());
                             }
                         }
+                    }
+                    
+                    if (Nsr_autoSync) {
+                        Nsr_iniciarSincronizacaoAutomatica();
                     }
                 } catch (IOException e) {
                     Nsr_adicionarLog("Erro ao iniciar servidor: " + e.getMessage());
@@ -365,18 +297,14 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
      */
     private void Nsr_stopServer() {
         Nsr_running = false;
-        
-        // Parar a sincronização automática
-        Nsr_pararSincronizacaoAutomatica();
-        
         try {
             // Fechar todas as conexões de clientes
-            for (Nsr_ClienteHandler Nsr_cliente : Nsr_clientesConectados) {
-                Nsr_cliente.Nsr_fecharConexao();
+            for (Nsr_ClienteHandler cliente : Nsr_clientesConectados) {
+                cliente.Nsr_fecharConexao();
             }
             Nsr_clientesConectados.clear();
             Nsr_updateClientCount();
-            
+            Nsr_pararSincronizacaoAutomatica();
             if (Nsr_serverSocket != null && !Nsr_serverSocket.isClosed()) {
                 Nsr_serverSocket.close();
                 Nsr_adicionarLog("Servidor encerrado");
@@ -386,421 +314,717 @@ public class Nsr_ServidorSocket1_Carros extends JFrame {
             Nsr_adicionarLog("Erro ao encerrar servidor: " + e.getMessage());
         }
     }
+    
     /**
- * Inicia a sincronização automática com o servidor remoto
- */
-private void Nsr_iniciarSincronizacaoAutomatica() {
-    if (Nsr_timerSincronizacao != null) {
-        Nsr_timerSincronizacao.cancel();
+    * Inicia a sincronização automática com base no intervalo configurado
+    */
+   private void Nsr_iniciarSincronizacaoAutomatica() {
+       // Parar temporizador existente se houver
+       Nsr_pararSincronizacaoAutomatica();
+
+       Nsr_adicionarLog("Iniciando sincronização automática a cada " + Nsr_syncInterval + " segundos");
+
+       Nsr_syncTimer = new Timer(Nsr_syncInterval * 1000, new ActionListener() {
+           @Override
+           public void actionPerformed(ActionEvent e) {
+               Nsr_adicionarLog("Executando sincronização automática...");
+               Nsr_sincronizarComOutroServidor();
+           }
+       });
+
+       Nsr_syncTimer.start();
+   }
+
+   /**
+    * Para a sincronização automática
+    */
+   private void Nsr_pararSincronizacaoAutomatica() {
+       if (Nsr_syncTimer != null) {
+           Nsr_syncTimer.stop();
+           Nsr_syncTimer = null;
+           Nsr_adicionarLog("Sincronização automática parada");
+       }
+   }
+
+    
+    /**
+     * Sincroniza dados com outro servidor
+     */
+   private void Nsr_sincronizarComOutroServidor() {
+       String ip = Nsr_ipSincronizacaoField.getText().trim();
+       int Nsr_porta;
+
+       try {
+           Nsr_porta = Integer.parseInt(Nsr_portaSincronizacaoField.getText().trim());
+       } catch (NumberFormatException e) {
+           if (!Nsr_autoSync) { // Só mostra mensagem de erro se não for sincronização automática
+               JOptionPane.showMessageDialog(this, "A porta deve ser um número válido", "Erro", JOptionPane.ERROR_MESSAGE);
+           }
+           Nsr_adicionarLog("Erro na sincronização: porta inválida");
+           return;
+       }
+
+       int Nsr_tipoSincronizacao = Nsr_tipoSincronizacaoCombo.getSelectedIndex();
+
+       // Mostrar diálogo de progresso apenas se não for sincronização automática
+       JDialog progressDialog = null;
+       JLabel Nsr_statusLabel = null;
+
+       if (!Nsr_autoSync) {
+           progressDialog = new JDialog(this, "Sincronização", true);
+           JProgressBar progressBar = new JProgressBar();
+           progressBar.setIndeterminate(true);
+           Nsr_statusLabel = new JLabel("Conectando ao servidor remoto...");
+
+           JPanel panel = new JPanel(new BorderLayout(10, 10));
+           panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+           panel.add(Nsr_statusLabel, BorderLayout.NORTH);
+           panel.add(progressBar, BorderLayout.CENTER);
+
+           progressDialog.add(panel);
+           progressDialog.setSize(300, 100);
+           progressDialog.setLocationRelativeTo(this);
+       }
+
+       // Capturar referências finais para uso na thread
+       final JDialog finalProgressDialog = progressDialog;
+       final JLabel finalStatusLabel = Nsr_statusLabel;
+
+       // Executar sincronização em thread separada para não travar a UI
+       new Thread(() -> {
+           try {
+               Nsr_adicionarLog("Conectando ao servidor " + ip + ":" + Nsr_porta);
+               Socket socket = new Socket(ip, Nsr_porta);
+
+               if (!Nsr_autoSync && finalStatusLabel != null) {
+                   SwingUtilities.invokeLater(() -> finalStatusLabel.setText("Sincronizando dados..."));
+               }
+
+               DataInputStream entrada = new DataInputStream(socket.getInputStream());
+               DataOutputStream saida = new DataOutputStream(socket.getOutputStream());
+
+               // Enviar comando de sincronização
+               saida.writeInt(Nsr_COMANDO_SINCRONIZAR);
+               saida.writeInt(Nsr_tipoSincronizacao);
+
+               switch (Nsr_tipoSincronizacao) {
+                   case 0: // Unilateral (Enviar)
+                       Nsr_adicionarLog("Enviando dados para servidor remoto...");
+                       Nsr_enviarArquivo(saida, Nsr_arquivoDados);
+                       break;
+                   case 1: // Unilateral (Receber)
+                       Nsr_adicionarLog("Recebendo dados do servidor remoto...");
+                       Nsr_receberArquivo(entrada, Nsr_arquivoDados);
+                       break;
+                   case 2: // Bilateral
+                       Nsr_adicionarLog("Iniciando sincronização bilateral...");
+                       Nsr_enviarArquivo(saida, Nsr_arquivoDados);
+                       Nsr_receberArquivo(entrada, Nsr_arquivoDados + ".temp");
+
+                       // Mesclar os arquivos
+                       List<String> dadosOriginais = Nsr_lerArquivo(Nsr_arquivoDados);
+                       List<String> dadosRecebidos = Nsr_lerArquivo(Nsr_arquivoDados + ".temp");
+
+                       // Mesclar e eliminar duplicações (baseado em ID)
+                       List<String> dadosMesclados = Nsr_mesclarDados(dadosOriginais, dadosRecebidos);
+
+                       // Converter para timestamps para identificar as mudanças
+                       long timestampAntes = new File(Nsr_arquivoDados).lastModified();
+
+                       // Salvar arquivo mesclado
+                       Nsr_salvarArquivo(dadosMesclados, Nsr_arquivoDados);
+
+                       long timestampDepois = new File(Nsr_arquivoDados).lastModified();
+                       if (timestampAntes != timestampDepois) {
+                           Nsr_adicionarLog("Arquivo de dados foi modificado na sincronização");
+                       }
+
+                       // Excluir arquivo temporário
+                       File tempFile = new File(Nsr_arquivoDados + ".temp");
+                       if (tempFile.exists()) {
+                           tempFile.delete();
+                       }
+                       break;
+               }
+
+               socket.close();
+               Nsr_adicionarLog("Sincronização concluída com sucesso");
+
+               // Fechar diálogo e mostrar mensagem de sucesso apenas se não for sincronização automática
+               if (!Nsr_autoSync && finalProgressDialog != null) {
+                   SwingUtilities.invokeLater(() -> {
+                       finalProgressDialog.dispose();
+                       JOptionPane.showMessageDialog(Nsr_ServidorSocket1_Carros.this, 
+                               "Sincronização concluída com sucesso!", 
+                               "Sincronização", JOptionPane.INFORMATION_MESSAGE);
+                   });
+               }
+
+           } catch (IOException e) {
+               Nsr_adicionarLog("Falha na sincronização: " + e.getMessage());
+
+               // Fechar diálogo e mostrar erro apenas se não for sincronização automática
+               if (!Nsr_autoSync && finalProgressDialog != null) {
+                   SwingUtilities.invokeLater(() -> {
+                       finalProgressDialog.dispose();
+                       JOptionPane.showMessageDialog(Nsr_ServidorSocket1_Carros.this, 
+                               "Erro ao sincronizar: " + e.getMessage(), 
+                               "Erro de Sincronização", JOptionPane.ERROR_MESSAGE);
+                   });
+               }
+           }
+       }).start();
+
+       // Exibir diálogo de progresso apenas se não for sincronização automática
+       if (!Nsr_autoSync && progressDialog != null) {
+           progressDialog.setVisible(true);
+       }
+   }
+
+    /**
+     * Envia um arquivo para o servidor remoto
+     */
+    private void Nsr_enviarArquivo(DataOutputStream saida, String nomeArquivo) throws IOException {
+        File Nsr_arquivo = new File(nomeArquivo);
+        
+        if (!Nsr_arquivo.exists()) {
+            // Enviar tamanho zero
+            saida.writeLong(0);
+            return;
+        }
+        
+        // Enviar tamanho do arquivo
+        saida.writeLong(Nsr_arquivo.length());
+        
+        // Enviar conteúdo do arquivo
+        FileInputStream fileIn = new FileInputStream(Nsr_arquivo);
+        byte[] buffer = new byte[4096];
+        int bytesRead;
+        
+        while ((bytesRead = fileIn.read(buffer)) != -1) {
+            saida.write(buffer, 0, bytesRead);
+        }
+        
+        saida.flush();
+        fileIn.close();
     }
     
-    Nsr_timerSincronizacao = new Timer();
-    Nsr_timerSincronizacao.scheduleAtFixedRate(new TimerTask() {
+    /**
+     * Recebe um arquivo do servidor remoto
+     */
+    private void Nsr_receberArquivo(DataInputStream entrada, String nomeArquivo) throws IOException {
+        // Receber tamanho do arquivo
+        long tamanhoArquivo = entrada.readLong();
+
+        if (tamanhoArquivo == 0) {
+            // Arquivo vazio ou inexistente no servidor remoto
+            Nsr_adicionarLog("Arquivo vazio ou inexistente no servidor remoto");
+            return;
+        }
+
+        // Verificar se o diretório existe
+        File arquivo = new File(nomeArquivo);
+        File diretorio = arquivo.getParentFile();
+        if (diretorio != null && !diretorio.exists()) {
+            diretorio.mkdirs();
+        }
+
+        // Receber conteúdo do arquivo
+        FileOutputStream fileOut = new FileOutputStream(nomeArquivo);
+        byte[] buffer = new byte[4096];
+        long bytesRestantes = tamanhoArquivo;
+        int bytesRead;
+
+        while (bytesRestantes > 0 && (bytesRead = entrada.read(buffer, 0, (int)Math.min(buffer.length, bytesRestantes))) != -1) {
+            fileOut.write(buffer, 0, bytesRead);
+            bytesRestantes -= bytesRead;
+        }
+
+        fileOut.close();
+    }
+
+    /**
+     * Lê o conteúdo de um arquivo e retorna como lista de strings
+     */
+   private List<String> Nsr_lerArquivo(String nomeArquivo) throws IOException {
+        List<String> linhas = new ArrayList<>();
+        File arquivo = new File(nomeArquivo);
+
+        if (!arquivo.exists()) {
+            Nsr_adicionarLog("Arquivo não encontrado: " + nomeArquivo);
+            return linhas;
+        }
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(arquivo))) {
+            String linha;
+            while ((linha = reader.readLine()) != null) {
+                linhas.add(linha);
+            }
+        }
+
+        return linhas;
+    }
+
+    /**
+     * Salva uma lista de strings em um arquivo
+     */
+    private void Nsr_salvarArquivo(List<String> linhas, String nomeArquivo) throws IOException {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(nomeArquivo))) {
+            for (String linha : linhas) {
+                writer.println(linha);
+            }
+        }
+    }
+    
+    /**
+     * Mescla dois conjuntos de dados, eliminando duplicações com base no ID
+     */
+    private List<String> Nsr_mesclarDados(List<String> dados1, List<String> dados2) {
+        List<String> dadosMesclados = new ArrayList<>();
+        
+        // Manter track dos IDs já processados
+        List<String> idsProcessados = new ArrayList<>();
+        
+        // Processar dados do primeiro conjunto
+        for (String linha : dados1) {
+            String[] campos = linha.split("\\|");
+            if (campos.length > 0) {
+                String id = campos[0].trim();
+                if (!idsProcessados.contains(id)) {
+                    dadosMesclados.add(linha);
+                    idsProcessados.add(id);
+                }
+            }
+        }
+        
+        // Processar dados do segundo conjunto
+        for (String linha : dados2) {
+            String[] campos = linha.split("\\|");
+            if (campos.length > 0) {
+                String id = campos[0].trim();
+                if (!idsProcessados.contains(id)) {
+                    dadosMesclados.add(linha);
+                    idsProcessados.add(id);
+                }
+            }
+        }
+        
+        return dadosMesclados;
+    }
+    
+    /**
+     * Atualiza o status do servidor na interface
+     */
+    private void Nsr_updateStatus(String status) {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                Nsr_statusLabel.setText("Status: " + status);
+            }
+        });
+    }
+    
+    /**
+     * Atualiza a contagem de clientes na interface
+     */
+    private void Nsr_updateClientCount() {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                Nsr_clientCountLabel.setText("Clientes: " + Nsr_clientesConectados.size());
+            }
+        });
+    }
+    
+    /**
+     * Classe para representar um carro
+    */
+    private class Carro {
+        private int id;
+        private String placa;
+        private String modelo;
+        private String marca;
+        private int ano;
+        private String combustivel;
+        private String cor;
+        private double quilometragem;
+        private String categoria;
+        private boolean disponivel;
+        private double valorCompra;
+        private double valorVenda;
+        
+        public Carro(String linha) {
+            String[] campos = linha.split("\\|");
+            if (campos.length >= 12) {
+                this.id = Integer.parseInt(campos[0].trim());
+                this.placa = campos[1].trim();
+                this.modelo = campos[2].trim();
+                this.marca = campos[3].trim();
+                this.ano = Integer.parseInt(campos[4].trim());
+                this.combustivel = campos[5].trim();
+                this.cor = campos[6].trim();
+                this.quilometragem = Double.parseDouble(campos[7].trim());
+                this.categoria = campos[8].trim();
+                this.disponivel = Boolean.parseBoolean(campos[9].trim());
+                this.valorCompra = Double.parseDouble(campos[10].trim());
+                this.valorVenda = Double.parseDouble(campos[11].trim());
+            }
+        }
+        
+        public String paraString() {
+            return id + "|" + placa + "|" + modelo + "|" + marca + "|" + ano + "|" + 
+                   combustivel + "|" + cor + "|" + quilometragem + "|" + categoria + "|" +
+                   disponivel + "|" + valorCompra + "|" + valorVenda;
+        }
+
+        // Getters e setters
+        public int getId() { return id; }
+        public void setId(int id) { this.id = id; }
+        public String getPlaca() { return placa; }
+        public void setPlaca(String placa) { this.placa = placa; }
+        public String getModelo() { return modelo; }
+        public void setModelo(String modelo) { this.modelo = modelo; }
+        public String getMarca() { return marca; }
+        public void setMarca(String marca) { this.marca = marca; }
+        public int getAno() { return ano; }
+        public void setAno(int ano) { this.ano = ano; }
+        public String getCombustivel() { return combustivel; }
+        public void setCombustivel(String combustivel) { this.combustivel = combustivel; }
+        public String getCor() { return cor; }
+        public void setCor(String cor) { this.cor = cor; }
+        public double getQuilometragem() { return quilometragem; }
+        public void setQuilometragem(double quilometragem) { this.quilometragem = quilometragem; }
+        public String getCategoria() { return categoria; }
+        public void setCategoria(String categoria) { this.categoria = categoria; }
+        public boolean isDisponivel() { return disponivel; }
+        public void setDisponivel(boolean disponivel) { this.disponivel = disponivel; }
+        public double getValorCompra() { return valorCompra; }
+        public void setValorCompra(double valorCompra) { this.valorCompra = valorCompra; }
+        public double getValorVenda() { return valorVenda; }
+        public void setValorVenda(double valorVenda) { this.valorVenda = valorVenda; }
+    }
+    
+/**
+     * Classe para manipular as operações com o arquivo de dados
+     */
+    private class Nsr_ArquivoManager {
+        
+        /**
+         * Obtém todos os registros de carros do arquivo
+         */
+        public List<Carro> Nsr_obterTodosCarros() {
+            List<Carro> carros = new ArrayList<>();
+            try {
+                List<String> linhas = Nsr_lerArquivo(Nsr_arquivoDados);
+                for (String linha : linhas) {
+                    carros.add(new Carro(linha));
+                }
+                Nsr_adicionarLog("Lidos " + carros.size() + " carros do arquivo");
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao ler arquivo de dados: " + e.getMessage());
+            }
+            return carros;
+        }
+        
+        /**
+         * Obtém um carro pelo ID
+         */
+        public Carro Nsr_obterCarroPorId(int id) {
+            try {
+                List<String> linhas = Nsr_lerArquivo(Nsr_arquivoDados);
+                for (String linha : linhas) {
+                    Carro carro = new Carro(linha);
+                    if (carro.getId() == id) {
+                        return carro;
+                    }
+                }
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao ler arquivo de dados: " + e.getMessage());
+            }
+            return null;
+        }
+        
+        /**
+         * Adiciona um novo carro ao arquivo
+         */
+        public boolean Nsr_adicionarCarro(Carro novoCarro) {
+            try {
+                // Verificar se já existe um carro com esse ID
+                Carro existente = Nsr_obterCarroPorId(novoCarro.getId());
+                if (existente != null) {
+                    return false; // ID já existe
+                }
+                
+                // Adicionar ao arquivo
+                List<String> linhas = Nsr_lerArquivo(Nsr_arquivoDados);
+                linhas.add(novoCarro.paraString());
+                Nsr_salvarArquivo(linhas, Nsr_arquivoDados);
+                Nsr_adicionarLog("Carro ID " + novoCarro.getId() + " adicionado");
+                return true;
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao adicionar carro: " + e.getMessage());
+                return false;
+            }
+        }
+        
+        /**
+         * Atualiza um carro existente
+         */
+        public boolean Nsr_atualizarCarro(Carro carroAtualizado) {
+            try {
+                List<String> linhas = Nsr_lerArquivo(Nsr_arquivoDados);
+                List<String> novasLinhas = new ArrayList<>();
+                boolean encontrado = false;
+                
+                for (String linha : linhas) {
+                    Carro carro = new Carro(linha);
+                    if (carro.getId() == carroAtualizado.getId()) {
+                        novasLinhas.add(carroAtualizado.paraString());
+                        encontrado = true;
+                    } else {
+                        novasLinhas.add(linha);
+                    }
+                }
+                
+                if (encontrado) {
+                    Nsr_salvarArquivo(novasLinhas, Nsr_arquivoDados);
+                    Nsr_adicionarLog("Carro ID " + carroAtualizado.getId() + " atualizado");
+                    return true;
+                }
+                
+                return false;
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao atualizar carro: " + e.getMessage());
+                return false;
+            }
+        }
+        
+        /**
+         * Remove um carro pelo ID
+         */
+        public boolean Nsr_removerCarro(int id) {
+            try {
+                List<String> linhas = Nsr_lerArquivo(Nsr_arquivoDados);
+                List<String> novasLinhas = new ArrayList<>();
+                boolean removido = false;
+                
+                for (String linha : linhas) {
+                    Carro carro = new Carro(linha);
+                    if (carro.getId() != id) {
+                        novasLinhas.add(linha);
+                    } else {
+                        removido = true;
+                    }
+                }
+                
+                if (removido) {
+                    Nsr_salvarArquivo(novasLinhas, Nsr_arquivoDados);
+                    Nsr_adicionarLog("Carro ID " + id + " removido");
+                    return true;
+                }
+                
+                return false;
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao remover carro: " + e.getMessage());
+                return false;
+            }
+        }
+    }
+    
+    /**
+     * Classe para lidar com as conexões dos clientes
+     */
+    private class Nsr_ClienteHandler extends Thread {
+        private Socket Nsr_socket;
+        private DataInputStream Nsr_entrada;
+        private DataOutputStream Nsr_saida;
+        private boolean Nsr_conectado = false;
+        private Nsr_ArquivoManager Nsr_arquivoManager;
+        
+        public Nsr_ClienteHandler(Socket socket) {
+            this.Nsr_socket = socket;
+            this.Nsr_arquivoManager = new Nsr_ArquivoManager();
+            try {
+                Nsr_entrada = new DataInputStream(socket.getInputStream());
+                Nsr_saida = new DataOutputStream(socket.getOutputStream());
+                Nsr_conectado = true;
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao inicializar streams: " + e.getMessage());
+            }
+        }
+        
         @Override
         public void run() {
             try {
-                // Sincronizar baseado nos parâmetros salvos
-                Nsr_sincronizarComOutroServidorAutomatico();
-            } catch (Exception e) {
-                Nsr_adicionarLog("Erro na sincronização automática: " + e.getMessage());
+                while (Nsr_conectado && Nsr_running) {
+                    // Ler comando do cliente
+                    int comando = Nsr_entrada.readInt();
+                    processarComando(comando);
+                }
+            } catch (IOException e) {
+                // Pode ocorrer quando o cliente desconecta abruptamente
+                Nsr_adicionarLog("Cliente desconectado: " + e.getMessage());
+            } finally {
+                Nsr_fecharConexao();
+                Nsr_clientesConectados.remove(this);
+                Nsr_updateClientCount();
             }
         }
-    }, 0, Nsr_intervaloSincronizacao * 1000); // Converter segundos para milissegundos
-    
-    Nsr_sincronizacaoAutomaticaAtiva = true;
-    Nsr_adicionarLog("Sincronização automática iniciada com intervalo de " + 
-                   Nsr_intervaloSincronizacao + " segundos");
-}
-
-/**
- * Para a sincronização automática
- */
-private void Nsr_pararSincronizacaoAutomatica() {
-    if (Nsr_timerSincronizacao != null) {
-        Nsr_timerSincronizacao.cancel();
-        Nsr_timerSincronizacao = null;
-        Nsr_sincronizacaoAutomaticaAtiva = false;
-        Nsr_adicionarLog("Sincronização automática interrompida");
-    }
-}
-
-/**
- * Sincroniza dados com outro servidor (versão para chamada manual)
- */
-private void Nsr_sincronizarComOutroServidor() {
-    String Nsr_ip = Nsr_ipSincronizacaoField.getText().trim();
-    int Nsr_porta;
-    
-    try {
-        Nsr_porta = Integer.parseInt(Nsr_portaSincronizacaoField.getText().trim());
-    } catch (NumberFormatException e) {
-        JOptionPane.showMessageDialog(this, "A porta deve ser um número válido", "Erro", JOptionPane.ERROR_MESSAGE);
-        return;
-    }
-    
-    int Nsr_tipoSincronizacao = Nsr_tipoSincronizacaoCombo.getSelectedIndex();
-    
-    // Salvar configurações para sincronização automática
-    Nsr_ipServidorRemoto = Nsr_ip;
-    Nsr_portaServidorRemoto = Nsr_porta;
-    Nsr_tipoSincronizacaoAtual = Nsr_tipoSincronizacao;
-    
-    // Mostrar diálogo de progresso
-    JDialog Nsr_progressDialog = new JDialog(this, "Sincronização", true);
-    JProgressBar Nsr_progressBar = new JProgressBar();
-    Nsr_progressBar.setIndeterminate(true);
-    JLabel Nsr_statusLabel = new JLabel("Conectando ao servidor remoto...");
-    
-    JPanel Nsr_panel = new JPanel(new BorderLayout(10, 10));
-    Nsr_panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-    Nsr_panel.add(Nsr_statusLabel, BorderLayout.NORTH);
-    Nsr_panel.add(Nsr_progressBar, BorderLayout.CENTER);
-    
-    // Adicionar opção para manter sincronização automática
-    JCheckBox Nsr_manterSincronizacaoCheck = new JCheckBox("Manter sincronização automática");
-    Nsr_manterSincronizacaoCheck.setSelected(Nsr_sincronizacaoAutomaticaAtiva);
-    
-    JPanel Nsr_optionsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-    Nsr_optionsPanel.add(Nsr_manterSincronizacaoCheck);
-    
-    // Campo para intervalo de sincronização
-    JPanel Nsr_intervaloPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-    JLabel Nsr_intervaloLabel = new JLabel("Intervalo (segundos):");
-    JTextField Nsr_intervaloField = new JTextField(5);
-    Nsr_intervaloField.setText(String.valueOf(Nsr_intervaloSincronizacao));
-    Nsr_intervaloPanel.add(Nsr_intervaloLabel);
-    Nsr_intervaloPanel.add(Nsr_intervaloField);
-    
-    JPanel Nsr_southPanel = new JPanel(new BorderLayout());
-    Nsr_southPanel.add(Nsr_optionsPanel, BorderLayout.NORTH);
-    Nsr_southPanel.add(Nsr_intervaloPanel, BorderLayout.SOUTH);
-    
-    Nsr_panel.add(Nsr_southPanel, BorderLayout.SOUTH);
-    
-    Nsr_progressDialog.add(Nsr_panel);
-    Nsr_progressDialog.setSize(350, 180);
-    Nsr_progressDialog.setLocationRelativeTo(this);
-    
-    // Executar sincronização em thread separada
-    new Thread(() -> {
-        try {
-            Nsr_realizarSincronizacao(Nsr_ip, Nsr_porta, Nsr_tipoSincronizacao, Nsr_statusLabel);
-            
-            // Salvar configurações para sincronização automática
-            SwingUtilities.invokeLater(() -> {
-                try {
-                    Nsr_intervaloSincronizacao = Integer.parseInt(Nsr_intervaloField.getText().trim());
-                } catch (NumberFormatException e) {
-                    JOptionPane.showMessageDialog(
-                        Nsr_ServidorSocket1_Carros.this,
-                        "Intervalo inválido, usando valor padrão de 60 segundos",
-                        "Aviso",
-                        JOptionPane.WARNING_MESSAGE
-                    );
-                    Nsr_intervaloSincronizacao = 60;
-                }
-                
-                // Verificar se deve manter sincronização automática
-                if (Nsr_manterSincronizacaoCheck.isSelected()) {
-                    // Iniciar ou reiniciar a sincronização automática
-                    Nsr_iniciarSincronizacaoAutomatica();
-                } else {
-                    // Parar sincronização automática se estiver ativa
-                    if (Nsr_sincronizacaoAutomaticaAtiva) {
-                        Nsr_pararSincronizacaoAutomatica();
+        
+        /**
+         * Processa os comandos recebidos do cliente
+         */
+        private void processarComando(int comando) throws IOException {
+            switch (comando) {
+                case Nsr_COMANDO_PING:
+                    // Responder ao ping
+                    Nsr_saida.writeBoolean(true);
+                    Nsr_adicionarLog("Comando PING recebido e respondido");
+                    break;
+                    
+                case Nsr_COMANDO_HELLO:
+                    // Responder com uma mensagem de saudação
+                    String mensagem = "Bem-vindo ao Servidor de Cadastro de Carros!";
+                    Nsr_saida.writeUTF(mensagem);
+                    Nsr_adicionarLog("Comando HELLO recebido e respondido");
+                    break;
+                    
+                case Nsr_COMANDO_GET_ALL:
+                    // Enviar todos os carros
+                    List<Carro> carros = Nsr_arquivoManager.Nsr_obterTodosCarros();
+                    Nsr_saida.writeInt(carros.size());
+                    for (Carro carro : carros) {
+                        Nsr_saida.writeUTF(carro.paraString());
                     }
-                }
-                
-                // Fechar diálogo e mostrar mensagem de sucesso
-                Nsr_progressDialog.dispose();
-                
-                String Nsr_mensagemSucesso = "Sincronização concluída com sucesso!";
-                if (Nsr_sincronizacaoAutomaticaAtiva) {
-                    Nsr_mensagemSucesso += "\nSincronização automática ativa a cada " + 
-                                         Nsr_intervaloSincronizacao + " segundos.";
-                }
-                
-                JOptionPane.showMessageDialog(
-                    Nsr_ServidorSocket1_Carros.this, 
-                    Nsr_mensagemSucesso,
-                    "Sincronização", 
-                    JOptionPane.INFORMATION_MESSAGE
-                );
-                
-                // Atualizar label de status na interface
-                Nsr_atualizarStatusSincronizacao();
-            });
-            
-        } catch (IOException e) {
-            Nsr_adicionarLog("Falha na sincronização: " + e.getMessage());
-            
-            // Fechar diálogo e mostrar erro
-            SwingUtilities.invokeLater(() -> {
-                Nsr_progressDialog.dispose();
-                JOptionPane.showMessageDialog(
-                    Nsr_ServidorSocket1_Carros.this, 
-                    "Erro ao sincronizar: " + e.getMessage(), 
-                    "Erro de Sincronização", 
-                    JOptionPane.ERROR_MESSAGE
-                );
-            });
-        }
-    }).start();
-    
-    // Exibir diálogo de progresso
-    Nsr_progressDialog.setVisible(true);
-}
-
-/**
- * Sincroniza dados com outro servidor (versão para chamada automática)
- */
-private void Nsr_sincronizarComOutroServidorAutomatico() {
-    try {
-        Nsr_adicionarLog("Iniciando sincronização automática com " + 
-                       Nsr_ipServidorRemoto + ":" + Nsr_portaServidorRemoto);
-        
-        Nsr_realizarSincronizacao(Nsr_ipServidorRemoto, Nsr_portaServidorRemoto, 
-                                Nsr_tipoSincronizacaoAtual, null);
-        
-        Nsr_adicionarLog("Sincronização automática concluída com sucesso");
-        
-        // Atualizar label de última sincronização
-        SwingUtilities.invokeLater(() -> {
-            Nsr_atualizarStatusSincronizacao();
-        });
-        
-    } catch (IOException e) {
-        Nsr_adicionarLog("Falha na sincronização automática: " + e.getMessage());
-    }
-}
-
-/**
- * Atualiza o status de sincronização na interface
- */
-private void Nsr_atualizarStatusSincronizacao() {
-    for (Component comp : Nsr_syncPanel.getComponents()) {
-        if (comp instanceof JPanel) {
-            for (Component subComp : ((JPanel) comp).getComponents()) {
-                if (subComp instanceof JLabel && ((JLabel) subComp).getText().startsWith("Última sincronização")) {
-                    ((JLabel) subComp).setText("Última sincronização: " + 
-                                            new java.util.Date().toString());
-                } else if (subComp instanceof JLabel && ((JLabel) subComp).getText().startsWith("Status:")) {
-                    if (Nsr_sincronizacaoAutomaticaAtiva) {
-                        ((JLabel) subComp).setText("Status: Sincronização automática ativa (" + 
-                                                Nsr_intervaloSincronizacao + " segundos)");
-                        ((JLabel) subComp).setForeground(new Color(0, 128, 0)); // Verde
+                    Nsr_adicionarLog("Comando GET_ALL: enviados " + carros.size() + " carros");
+                    break;
+                    
+                case Nsr_COMANDO_GET_BY_ID:
+                    // Obter carro pelo ID
+                    int id = Nsr_entrada.readInt();
+                    Carro carro = Nsr_arquivoManager.Nsr_obterCarroPorId(id);
+                    if (carro != null) {
+                        Nsr_saida.writeBoolean(true);
+                        Nsr_saida.writeUTF(carro.paraString());
                     } else {
-                        ((JLabel) subComp).setText("Status: Sincronização manual");
-                        ((JLabel) subComp).setForeground(Color.BLACK);
+                        Nsr_saida.writeBoolean(false);
                     }
-                }
-            }
-        }
-    }
-}
+                    Nsr_adicionarLog("Comando GET_BY_ID: consultado ID " + id);
+                    break;
+                    
+                case Nsr_COMANDO_ADD:
+                    // Adicionar novo carro
+                    String dadosNovoCarro = Nsr_entrada.readUTF();
+                    Carro novoCarro = new Carro(dadosNovoCarro);
+                    boolean adicionado = Nsr_arquivoManager.Nsr_adicionarCarro(novoCarro);
+                    Nsr_saida.writeBoolean(adicionado);
+                    Nsr_adicionarLog("Comando ADD: carro " + (adicionado ? "adicionado" : "não adicionado"));
+                    break;
+                    
+                case Nsr_COMANDO_UPDATE:
+                    // Atualizar carro existente
+                    String dadosAtualizar = Nsr_entrada.readUTF();
+                    Carro carroAtualizar = new Carro(dadosAtualizar);
+                    boolean atualizado = Nsr_arquivoManager.Nsr_atualizarCarro(carroAtualizar);
+                    Nsr_saida.writeBoolean(atualizado);
+                    Nsr_adicionarLog("Comando UPDATE: carro ID " + carroAtualizar.getId() + 
+                                   " " + (atualizado ? "atualizado" : "não encontrado"));
+                    break;
+                    
+                case Nsr_COMANDO_DELETE:
+                    // Remover carro pelo ID
+                    int idRemover = Nsr_entrada.readInt();
+                    boolean removido = Nsr_arquivoManager.Nsr_removerCarro(idRemover);
+                    Nsr_saida.writeBoolean(removido);
+                    Nsr_adicionarLog("Comando DELETE: carro ID " + idRemover + 
+                                   " " + (removido ? "removido" : "não encontrado"));
+                    break;
+                    
+                case Nsr_COMANDO_SINCRONIZAR:
+                    // Lidar com solicitação de sincronização de outro servidor
+                    int tipoSincronizacao = Nsr_entrada.readInt();
+                    Nsr_adicionarLog("Solicitação de sincronização recebida, tipo: " + tipoSincronizacao);
 
-/**
- * Realiza a sincronização com outro servidor (código comum para manual e automática)
- */
-private void Nsr_realizarSincronizacao(String Nsr_ip, int Nsr_porta, int Nsr_tipoSincronizacao, 
-                                    JLabel Nsr_statusLabel) throws IOException {
-    
-    Nsr_adicionarLog("Conectando ao servidor " + Nsr_ip + ":" + Nsr_porta);
-    Socket Nsr_socket = new Socket(Nsr_ip, Nsr_porta);
-    
-    if (Nsr_statusLabel != null) {
-        SwingUtilities.invokeLater(() -> Nsr_statusLabel.setText("Sincronizando dados..."));
-    }
-    
-    DataInputStream Nsr_entrada = new DataInputStream(Nsr_socket.getInputStream());
-    DataOutputStream Nsr_saida = new DataOutputStream(Nsr_socket.getOutputStream());
-    
-    // Enviar comando de sincronização
-    Nsr_saida.writeInt(Nsr_COMANDO_SINCRONIZAR);
-    Nsr_saida.writeInt(Nsr_tipoSincronizacao);
-    
-    switch (Nsr_tipoSincronizacao) {
-        case 0: // Unilateral (Enviar)
-            Nsr_adicionarLog("Enviando dados para servidor remoto...");
-            Nsr_enviarArquivo(Nsr_saida, Nsr_arquivoDados);
-            break;
-        case 1: // Unilateral (Receber)
-            Nsr_adicionarLog("Recebendo dados do servidor remoto...");
-            Nsr_receberArquivo(Nsr_entrada, Nsr_arquivoDados);
-            break;
-        case 2: // Bilateral
-            Nsr_adicionarLog("Iniciando sincronização bilateral...");
-            Nsr_enviarArquivo(Nsr_saida, Nsr_arquivoDados);
-            Nsr_receberArquivo(Nsr_entrada, Nsr_arquivoDados + ".temp");
-            
-            // Mesclar os arquivos
-            List<String> Nsr_dadosOriginais = Nsr_lerArquivo(Nsr_arquivoDados);
-            List<String> Nsr_dadosRecebidos = Nsr_lerArquivo(Nsr_arquivoDados + ".temp");
-            
-            // Mesclar e eliminar duplicações (baseado em ID)
-            List<String> Nsr_dadosMesclados = Nsr_mesclarDados(Nsr_dadosOriginais, Nsr_dadosRecebidos);
-            
-            // Salvar arquivo mesclado
-            Nsr_salvarArquivo(Nsr_dadosMesclados, Nsr_arquivoDados);
-            
-            // Excluir arquivo temporário
-            File Nsr_tempFile = new File(Nsr_arquivoDados + ".temp");
-            if (Nsr_tempFile.exists()) {
-                Nsr_tempFile.delete();
+                    switch (tipoSincronizacao) {
+                        case 0: // Unilateral (Receber)
+                            Nsr_adicionarLog("Recebendo arquivo do servidor remoto...");
+                            Nsr_receberArquivo(Nsr_entrada, Nsr_arquivoDados + ".temp");
+
+                            // Mesclar ou substituir
+                            File tempFile = new File(Nsr_arquivoDados + ".temp");
+                            File destFile = new File(Nsr_arquivoDados);
+
+                            if (tempFile.exists() && tempFile.length() > 0) {
+                                // Fazer backup do arquivo original
+                                if (destFile.exists()) {
+                                    File backupFile = new File(Nsr_arquivoDados + ".bak");
+                                    if (backupFile.exists()) {
+                                        backupFile.delete();
+                                    }
+                                    destFile.renameTo(backupFile);
+                                }
+
+                                // Mover arquivo temporário para o destino
+                                tempFile.renameTo(destFile);
+                                Nsr_adicionarLog("Arquivo atualizado com sucesso");
+                            } else {
+                                Nsr_adicionarLog("Arquivo temporário não existe ou está vazio");
+                            }
+                            break;
+
+                        case 1: // Unilateral (Enviar)
+                            Nsr_adicionarLog("Enviando arquivo para o servidor remoto...");
+                            Nsr_enviarArquivo(Nsr_saida, Nsr_arquivoDados);
+                            break;
+
+                        case 2: // Bilateral
+                            Nsr_adicionarLog("Realizando sincronização bilateral...");
+                            Nsr_receberArquivo(Nsr_entrada, Nsr_arquivoDados + ".temp");
+                            Nsr_enviarArquivo(Nsr_saida, Nsr_arquivoDados);
+
+                            // Mesclar os arquivos
+                            List<String> dadosOriginais = Nsr_lerArquivo(Nsr_arquivoDados);
+                            List<String> dadosRecebidos = Nsr_lerArquivo(Nsr_arquivoDados + ".temp");
+
+                            // Mesclar e eliminar duplicações
+                            List<String> dadosMesclados = Nsr_mesclarDados(dadosOriginais, dadosRecebidos);
+
+                            // Salvar arquivo mesclado
+                            if (!dadosMesclados.isEmpty()) {
+                                Nsr_salvarArquivo(dadosMesclados, Nsr_arquivoDados);
+                                Nsr_adicionarLog("Dados mesclados com sucesso - " + dadosMesclados.size() + " registros");
+                            } else {
+                                Nsr_adicionarLog("Nenhum dado para mesclar");
+                            }
+
+                            // Excluir arquivo temporário
+                            tempFile = new File(Nsr_arquivoDados + ".temp");
+                            if (tempFile.exists()) {
+                                tempFile.delete();
+                            }
+                            break;
+                    }
+                    break;
+                default:
+                    Nsr_adicionarLog("Comando desconhecido recebido: " + comando);
+                    break;
             }
-            break;
-    }
-    
-    Nsr_socket.close();
-    Nsr_adicionarLog("Sincronização concluída com sucesso");
-}
-/**
- * Inicializa a interface de sincronização
- */
-private void Nsr_inicializarInterfaceSincronizacao() {
-    // Variáveis de estado para sincronização
-    Nsr_sincronizacaoAutomaticaAtiva = false;
-    Nsr_intervaloSincronizacao = 60; // Padrão: 60 segundos
-    Nsr_ipServidorRemoto = "";
-    Nsr_portaServidorRemoto = 0;
-    Nsr_tipoSincronizacaoAtual = 0;
-    
-    // Painel de sincronização
-    Nsr_syncPanel = new JPanel();
-    Nsr_syncPanel.setLayout(new BorderLayout(10, 10));
-    Nsr_syncPanel.setBorder(BorderFactory.createTitledBorder("Sincronização com Outro Servidor"));
-    
-    // Painel de inputs para configuração de sincronização
-    JPanel Nsr_configPanel = new JPanel(new GridLayout(0, 2, 5, 5));
-    
-    // IP do servidor remoto
-    JLabel Nsr_ipLabel = new JLabel("IP do Servidor Remoto:");
-    Nsr_ipSincronizacaoField = new JTextField(15);
-    Nsr_configPanel.add(Nsr_ipLabel);
-    Nsr_configPanel.add(Nsr_ipSincronizacaoField);
-    
-    // Porta do servidor remoto
-    JLabel Nsr_portaLabel = new JLabel("Porta:");
-    Nsr_portaSincronizacaoField = new JTextField(15);
-    Nsr_configPanel.add(Nsr_portaLabel);
-    Nsr_configPanel.add(Nsr_portaSincronizacaoField);
-    
-    // Tipo de sincronização
-    JLabel Nsr_tipoSincLabel = new JLabel("Tipo de Sincronização:");
-    Nsr_tipoSincronizacaoCombo = new JComboBox<>(new String[]{
-        "Unilateral (Enviar dados)", 
-        "Unilateral (Receber dados)", 
-        "Bilateral (Enviar e receber)"
-    });
-    Nsr_configPanel.add(Nsr_tipoSincLabel);
-    Nsr_configPanel.add(Nsr_tipoSincronizacaoCombo);
-    
-    // Intervalo de sincronização
-    JLabel Nsr_intervaloLabel = new JLabel("Intervalo (segundos):");
-    Nsr_intervaloSincronizacaoField = new JTextField(15);
-    Nsr_intervaloSincronizacaoField.setText(String.valueOf(Nsr_intervaloSincronizacao));
-    Nsr_configPanel.add(Nsr_intervaloLabel);
-    Nsr_configPanel.add(Nsr_intervaloSincronizacaoField);
-    
-    // Botões de ação
-    JPanel Nsr_buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-    
-    JButton Nsr_sincronizarButton = new JButton("Sincronizar Agora");
-    Nsr_sincronizarButton.addActionListener(e -> Nsr_sincronizarComOutroServidor());
-    Nsr_buttonPanel.add(Nsr_sincronizarButton);
-    
-    Nsr_habilitarSincAutomaticaCheck = new JCheckBox("Sincronização Automática");
-    Nsr_habilitarSincAutomaticaCheck.addActionListener(e -> {
-        if (Nsr_habilitarSincAutomaticaCheck.isSelected()) {
-            try {
-                // Validar campos
-                String Nsr_ip = Nsr_ipSincronizacaoField.getText().trim();
-                if (Nsr_ip.isEmpty()) {
-                    throw new Exception("IP do servidor remoto não pode estar vazio");
-                }
-                
-                int Nsr_porta = Integer.parseInt(Nsr_portaSincronizacaoField.getText().trim());
-                if (Nsr_porta <= 0 || Nsr_porta > 65535) {
-                    throw new Exception("Porta deve estar entre 1 e 65535");
-                }
-                
-                int Nsr_intervalo = Integer.parseInt(Nsr_intervaloSincronizacaoField.getText().trim());
-                if (Nsr_intervalo < 5) {
-                    throw new Exception("Intervalo mínimo é de 5 segundos");
-                }
-                
-                // Salvar configurações
-                Nsr_ipServidorRemoto = Nsr_ip;
-                Nsr_portaServidorRemoto = Nsr_porta;
-                Nsr_tipoSincronizacaoAtual = Nsr_tipoSincronizacaoCombo.getSelectedIndex();
-                Nsr_intervaloSincronizacao = Nsr_intervalo;
-                
-                // Iniciar sincronização automática
-                Nsr_iniciarSincronizacaoAutomatica();
-                
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(
-                    Nsr_ServidorSocket1_Carros.this,
-                    "Valores numéricos inválidos. Verifique porta e intervalo.",
-                    "Erro",
-                    JOptionPane.ERROR_MESSAGE
-                );
-                Nsr_habilitarSincAutomaticaCheck.setSelected(false);
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(
-                    Nsr_ServidorSocket1_Carros.this,
-                    ex.getMessage(),
-                    "Erro",
-                    JOptionPane.ERROR_MESSAGE
-                );
-                Nsr_habilitarSincAutomaticaCheck.setSelected(false);
-            }
-        } else {
-            // Parar sincronização automática
-            Nsr_pararSincronizacaoAutomatica();
         }
         
-        // Atualizar status na interface
-        Nsr_atualizarStatusSincronizacao();
-    });
-    Nsr_buttonPanel.add(Nsr_habilitarSincAutomaticaCheck);
-    
-    // Painel de status
-    JPanel Nsr_statusSyncPanel = new JPanel(new GridLayout(0, 1, 5, 5));
-    JLabel Nsr_statusSyncLabel = new JLabel("Status: Sincronização manual");
-    JLabel Nsr_ultimaSincLabel = new JLabel("Última sincronização: Nunca");
-    Nsr_statusSyncPanel.add(Nsr_statusSyncLabel);
-    Nsr_statusSyncPanel.add(Nsr_ultimaSincLabel);
-    
-    // Adicionar componentes ao painel de sincronização
-    Nsr_syncPanel.add(Nsr_configPanel, BorderLayout.NORTH);
-    Nsr_syncPanel.add(Nsr_buttonPanel, BorderLayout.CENTER);
-    Nsr_syncPanel.add(Nsr_statusSyncPanel, BorderLayout.SOUTH);
-    
-    // Adicionar à interface principal (supondo que haja um tabbedPane)
-    Nsr_tabbedPane.addTab("Sincronização", Nsr_syncPanel);
-}
-
-/**
- * Libera recursos ao fechar o aplicativo
- */
-private void Nsr_liberarRecursos() {
-    // Parar sincronização automática se estiver ativa
-    if (Nsr_sincronizacaoAutomaticaAtiva) {
-        Nsr_pararSincronizacaoAutomatica();
+        /**
+         * Fecha a conexão com o cliente
+         */
+        public void Nsr_fecharConexao() {
+            try {
+                Nsr_conectado = false;
+                if (Nsr_entrada != null) Nsr_entrada.close();
+                if (Nsr_saida != null) Nsr_saida.close();
+                if (Nsr_socket != null && !Nsr_socket.isClosed()) Nsr_socket.close();
+            } catch (IOException e) {
+                Nsr_adicionarLog("Erro ao fechar conexão: " + e.getMessage());
+            }
+        }
     }
-    
-    // Parar servidor e fechar conexões de clientes
-    Nsr_pararServidor();
-    
-    // Fechar todas as conexões de cliente
-    for (Nsr_ClienteHandler cliente : Nsr_clientesConectados) {
-        cliente.Nsr_fecharConexao();
-    }
-    Nsr_clientesConectados.clear();
-}
-
-
     
     /**
      * Método principal
@@ -813,4 +1037,5 @@ private void Nsr_liberarRecursos() {
             }
         });
     }
+   
 }
